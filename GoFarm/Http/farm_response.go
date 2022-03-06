@@ -20,6 +20,7 @@ type Response struct {
 	ContentLength    int64
 	TransferEncoding []string
 	Close            bool
+	CloseWritten     bool `default:"false"`
 	Uncompressed     bool
 	// TODO(Jeremy): Implement Trailers
 	// Trailer Header
@@ -46,6 +47,19 @@ func (r *Response) Write(w io.Writer) error {
 		io.WriteString(w, strconv.FormatInt(r.ContentLength, 10)+"\r\n")
 	}
 
+	// If we're sending a non-chunked HTTP/1.1 response without a
+	// content-length, the only way to do that is the old HTTP/1.0
+	// way, by noting the EOF with a connection close, so we need
+	// to set Close.
+	if r.ContentLength == -1 && !r.CloseWritten && r.protoAtLeast(1, 1) {
+		io.WriteString(w, "Connection: close\r\n")
+		r.CloseWritten = true
+	}
+	if r.Close && !r.CloseWritten {
+		io.WriteString(w, "Connection: close\r\n")
+		r.CloseWritten = true
+	}
+
 	// Write end of header into buffer
 	io.WriteString(w, "\r\n")
 
@@ -65,5 +79,15 @@ func shouldSendContentLength(contentLength int64, requestMethod *string) bool {
 		return false
 	}
 
+	return false
+}
+
+func (r *Response) protoAtLeast(major int, minor int) bool {
+	if r.ProtoMajor > major {
+		return true
+	}
+	if r.ProtoMajor == major && r.ProtoMinor >= minor {
+		return true
+	}
 	return false
 }
